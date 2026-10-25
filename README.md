@@ -1,91 +1,77 @@
 # Mini ASM
 
-Mini ASM(Attack Surface Management) 프로젝트입니다.  
-구름톤 딥다이브 정보보호16회의 3차 세미프로젝트로 진행했습니다.
+**An attack surface workbench: discover what's exposed, see what changed, and prove what's actually vulnerable.**
 
-취약 자산을 대상으로 포트/서비스 스캔, 위험 분석, 드리프트 감지, AI 브리핑, 검증 레이어를 하나의 흐름으로 연결하는 것을 목표로 했습니다.
-팀 프로젝트 결과물이며, 원본 저장소 주소는 https://github.com/Tri-Best-3/portScanner_main 입니다.
+Mini ASM (Attack Surface Management) runs the full loop in one place: sweep a network range for live hosts, fingerprint their services, enrich findings with live CVE, KEV and EPSS data, verify them with Nuclei, compare against the last scan to catch drift, and summarize it all in an AI briefing.
 
-주로 **통합/설계/품질관리를 담당**하였으며 세부 구현은 아래와 같습니다.
-- 프로젝트 구조 및 백엔드/분석 아키텍처 설계(Backend & Analysis 설계)
-- CPE 기반 live lookup 방향 반영
-- 팀 feature 브랜치 통합 및 실행 가능한 도커 기반 E2E 환경 구성
-- 백엔드/분석 핵심 기능 구현 및 자동 검증 흐름 정리
-- 취약 컨테이너/도커 환경 구성 및 실제 스캔, 분석, 검증 테스트
-- 팀원 코드 검수, 수정 가이드, 통합 기준 관리
+<p align="center">
+  <a href="media/mini-asm.mp4"><img src="media/preview.webp" alt="Mini ASM technical flow: range discovery, parallel scans, vulnerability enrichment, verification, reporting and drift detection" width="100%"></a>
+  <br>
+  <sub>Preview runs at 1.35× speed. <a href="media/mini-asm.mp4">Watch the full video (0:54)</a></sub>
+</p>
 
-## 프로젝트 목적
+## Why
 
-- 외부 노출 자산을 식별하고 포트/서비스 수집
-- 수집 결과를 바탕으로 룰 기반 분석 및 live vulnerability enrichment 수행
-- 이전 결과와 비교해 drift(포트 변화, 인벤토리 변화) 감지
-- AI 브리핑과 검증 레이어를 통해 결과 해석까지 연결
+A port scan tells you what's open, not what matters. Teams end up with long lists of services, CVE matches nobody has confirmed, and no memory of what the network looked like last week. Mini ASM connects the steps that are usually separate tools: discovery, risk, verification and change tracking, so each finding arrives with how risky it is, whether it was confirmed, and whether it is new.
 
-## 주요 기능
+## Features
 
-- 단일 타깃 스캔
-- 소규모 병렬 스캔
-- 대역 기반 인벤토리 스캔 및 host/port drift 감지
-- 룰 기반 취약점 분석 및 위험 점수 산정
-- CPE 기반 NVD live lookup 및 KEV / EPSS enrichment
-- AI 브리핑 생성
-- nuclei 기반 자동 검증 레이어
-- 시나리오 기반 drift 유발 실험 환경
+- **Asset discovery.** Sweep a CIDR range, find live hosts and queue them for scanning.
+- **Parallel service scans.** Nmap `-sV` runs per target in parallel to collect ports, services, versions and CPEs.
+- **Live vulnerability enrichment.** Rule-based findings are expanded with CVEs from NVD (CPE-based lookup), CISA KEV status and FIRST EPSS scores.
+- **Risk scoring.** Each host gets a 0–100 score and grade from severity weights, KEV and EPSS bonuses, and bonuses for risky service combinations (for example Redis exposed alongside SSH).
+- **Two-layer verification.** Nuclei templates check separately whether the service really exists and whether the vulnerable condition holds, so each finding ends up *verified*, *suspected* or *not verified*, with evidence stored.
+- **Drift detection.** Each scan is compared with the previous one to surface opened and closed ports and new or missing hosts.
+- **AI briefing.** Gemini turns the results into a narrative risk report, with a local Ollama model or a template as fallback.
+- **Dashboard.** A Streamlit dashboard for runs, findings, verification history, drift and reports, backed by a FastAPI service with OpenAPI docs.
 
-## 아키텍처
+## How it works
 
-- `scanner/`
-  - Nmap 기반 스캔 모듈
-  - 단일 타깃 스캔 및 대역 병렬 스캔 담당
-- `analysis/`
-  - 규칙 기반 분석
-  - CVE / KEV / EPSS enrichment
-  - risk scoring
-  - nuclei 검증 로직
-- `backend/`
-  - FastAPI 기반 API 서버
-  - scan / analysis / verification / report workflow 관리
-  - 결과 저장 및 조회
-- `dashboard/`
-  - Streamlit 기반 시각화 대시보드
-- `scenarios/`
-  - drift 재현용 시나리오 스크립트
+```mermaid
+flowchart LR
+  T["Target or CIDR range"] --> S["Scanner<br/>Nmap discovery + -sV"]
+  S --> A["Analysis<br/>rules → NVD CVEs → KEV · EPSS"]
+  A --> RS["Risk score & grade"]
+  A --> V["Verification<br/>Nuclei: service check + risk check"]
+  RS --> REP["Report<br/>Gemini · Ollama · template"]
+  V --> REP
+  S --> DR["Drift<br/>compare with previous scan"]
+  REP --> DB[("SQLite")]
+  DR --> DB
+  DB --> UI["Streamlit dashboard"]
+  API["FastAPI<br/>scan · analysis · verification · report workflows"] -.-> S
+```
 
-## 전체 흐름
+The repository ships a practice lab of intentionally vulnerable containers (Juice Shop, Tomcat CVE-2017-12615, unauthenticated Redis, SambaCry, MySQL CVE-2012-2122, Elasticsearch CVE-2015-1427 and vsftpd 2.3.4) and scenario scripts that change their exposure on demand, so drift detection and verification can be exercised end to end.
 
-1. 타깃 또는 대역 스캔 실행
-2. 포트/서비스 결과 저장
-3. 분석 모듈이 취약점 및 위험 점수 산정
-4. 자동 검증 레이어 수행
-5. AI 브리핑 및 리포트 생성
-6. 대시보드에서 결과, drift, 검증 이력 확인
+## Getting started
 
-## 실행 방법
-
-```powershell
+```bash
+cp .env.example .env    # optional: NVD_API_KEY, GEMINI_API_KEY, live lookup toggles
 docker compose up -d --build
 ```
 
-### 접속 주소
+| Service | URL |
+|---|---|
+| Dashboard | http://localhost:8501 |
+| API docs | http://localhost:8000/docs |
+| Health | http://localhost:8000/health |
 
-- Dashboard: `http://localhost:8501`
-- Backend API Docs: `http://localhost:8000/docs`
-- Backend Health: `http://localhost:8000/health`
-
-### 종료
-
-```powershell
-docker compose down
+```bash
+docker compose down      # stop
+docker compose down -v   # stop and reset volumes
 ```
 
-볼륨 초기화:
+Live NVD, KEV and EPSS lookups are opt-in through `ANALYSIS_USE_LIVE_*` in `.env`.
 
-```powershell
-docker compose down -v
-```
+## Scope
 
-## 프로젝트 성격 및 한계
+Mini ASM implements and validates the ASM workflow end to end. It handles parallel and range scans, but it is not built for tens of thousands of assets, and some scenarios and verification templates target the bundled lab. Only scan networks you are authorized to test.
 
-- ASM의 흐름을 직접 구현하고 검증하는 프로젝트입니다.
-- 병렬 스캔, 대역 스캔, 검증 레이어를 포함하지만, 수만 건 자산을 처리하는 대규모 운영 구조는 아닙니다.
-- 시나리오 및 일부 검증 템플릿은 실습 환경 기준으로 동작합니다.
+## Tech stack
+
+Python · Nmap · Nuclei · FastAPI · Streamlit · SQLite · Docker Compose · NVD / CISA KEV / FIRST EPSS APIs · Gemini · Ollama
+
+---
+
+More projects at [hhkb.dev](https://hhkb.dev) · [Intbox](https://intbox.org)
